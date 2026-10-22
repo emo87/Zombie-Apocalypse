@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: apocalisse-a-domicilio
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start

@@ -1,0 +1,15 @@
+{
+  "name": "apocalisse-a-domicilio",
+  "version": "0.1.0",
+  "description": "Co-op zombie comico fino a 6 giocatori, ognuno dal proprio dispositivo",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

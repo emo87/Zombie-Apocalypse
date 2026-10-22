@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Apocalisse a Domicilio</title>
+<style>
+  html,body{margin:0;height:100%;background:#1b1b24;overflow:hidden;font-family:system-ui,-apple-system,sans-serif;color:#fff;touch-action:none;user-select:none;-webkit-user-select:none}
+  canvas{display:block;width:100%;height:100%}
+  .overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(10,10,20,.85);z-index:5}
+  .card{background:#2b2b3a;padding:22px;border-radius:16px;width:min(340px,90vw);text-align:center;box-shadow:0 10px 40px #0008}
+  .card h1{margin:0 0 4px;font-size:24px}
+  .card p{margin:4px 0 14px;color:#b9b9cc;font-size:14px}
+  input{width:100%;box-sizing:border-box;padding:12px;border-radius:10px;border:2px solid #44445a;background:#1b1b28;color:#fff;font-size:16px;margin-bottom:10px;text-align:center}
+  button{cursor:pointer;border:0;border-radius:10px;padding:12px 16px;font-size:16px;font-weight:700;background:#ff5a36;color:#fff}
+  button.sec{background:#44445a}
+  .card button{width:100%;margin-bottom:8px}
+  #err{color:#ff8a8a;min-height:18px;font-size:14px}
+  #lobby{position:fixed;top:10px;left:50%;transform:translateX(-50%);background:#000a;border-radius:14px;padding:12px 16px;text-align:center;z-index:4;display:none;max-width:92vw}
+  #lobby .code{font-size:30px;font-weight:900;letter-spacing:6px;color:#ffd24a}
+  #lobby .row{display:flex;gap:8px;justify-content:center;margin-top:8px}
+  #lobby .who{margin-top:6px;font-size:15px}
+  #shout{position:fixed;bottom:8px;left:50%;transform:translateX(-50%);display:none;gap:6px;z-index:3}
+  #shout button{padding:8px 10px;font-size:12px;background:#000a;border:1px solid #fff4}
+  #over h2{margin:0 0 8px;font-size:28px;color:#ff5a36}
+  #score{text-align:left;margin:10px 0;font-size:16px;line-height:1.7}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+
+<div id="menu" class="overlay">
+  <div class="card">
+    <h1>🧟 Apocalisse a Domicilio</h1>
+    <p>Co-op zombie comico, fino a 6 giocatori</p>
+    <input id="name" maxlength="12" placeholder="Il tuo nome" autocomplete="off">
+    <button id="btnCreate">Crea stanza</button>
+    <p style="margin:6px 0">oppure entra con un codice</p>
+    <input id="code" maxlength="4" placeholder="CODICE" autocomplete="off" style="text-transform:uppercase;letter-spacing:6px;font-weight:800">
+    <button id="btnJoin" class="sec">Entra</button>
+    <div id="err"></div>
+  </div>
+</div>
+
+<div id="lobby">
+  <div>Codice stanza</div>
+  <div class="code" id="lcode">----</div>
+  <div class="who" id="lwho"></div>
+  <div class="row">
+    <button id="btnShare" class="sec">Invita amici</button>
+    <button id="btnStart">Inizia!</button>
+  </div>
+  <div style="font-size:12px;color:#b9b9cc;margin-top:6px" id="lhint"></div>
+</div>
+
+<div id="shout"></div>
+
+<div id="over" class="overlay" style="display:none">
+  <div class="card">
+    <h2>Siete stati mangiati 🧠</h2>
+    <div>Ondata raggiunta: <b id="owave">0</b></div>
+    <div id="score"></div>
+    <button id="btnAgain">Ricomincia</button>
+    <div id="owait" style="font-size:13px;color:#b9b9cc"></div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const cv = $('cv'), ctx = cv.getContext('2d');
+const EM = ['🤠', '👩‍🍳', '🧑‍🔧', '🧑‍⚕️', '🥷', '🤡'];
+const PH = ['AIUTOOO!', 'LO HO PRESO!', 'SOTTO DI ME!', 'UN BACIO PER FAVORE 💋'];
+const COL = ['#ffd24a', '#7ee081', '#6ec1ff', '#ff8ad8', '#ffa96b', '#c3a6ff'];
+let ws = null, myId = null, code = '', S = null, WW = 1600, HH = 1000, SHELVES = [];
+let dpr = 1, cw = 0, ch = 0, frame = 0;
+const disp = new Map();
+
+// ---------- Menu ----------
+const q = new URLSearchParams(location.search);
+if (q.get('r')) $('code').value = q.get('r').toUpperCase().slice(0, 4);
+try { $('name').value = localStorage.getItem('apd_name') || ''; } catch (e) {}
+
+function connect(first) {
+  const name = $('name').value.trim() || 'Anonimo';
+  try { localStorage.setItem('apd_name', name); } catch (e) {}
+  $('err').textContent = '';
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+  ws.onopen = () => ws.send(JSON.stringify(first(name)));
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.t === 'joined') {
+      myId = m.id; code = m.code; WW = m.W; HH = m.H; SHELVES = m.shelves;
+      $('menu').style.display = 'none'; $('shout').style.display = 'flex';
+      history.replaceState(null, '', '?r=' + code);
+    } else if (m.t === 'err') { $('err').textContent = m.m; ws.close(); }
+    else if (m.t === 's') { S = m; onSnapshot(); }
+  };
+  ws.onclose = () => {
+    if (myId !== null) { myId = null; S = null; $('menu').style.display = 'flex'; $('lobby').style.display = 'none'; $('over').style.display = 'none'; $('shout').style.display = 'none'; $('err').textContent = 'Connessione persa'; }
+  };
+}
+$('btnCreate').onclick = () => connect((name) => ({ t: 'create', name }));
+$('btnJoin').onclick = () => {
+  const c = $('code').value.trim().toUpperCase();
+  if (c.length !== 4) { $('err').textContent = 'Il codice ha 4 lettere'; return; }
+  connect((name) => ({ t: 'join', code: c, name }));
+};
+$('btnStart').onclick = () => ws && ws.send(JSON.stringify({ t: 'start' }));
+$('btnAgain').onclick = () => ws && ws.send(JSON.stringify({ t: 'start' }));
+$('btnShare').onclick = async () => {
+  const url = location.origin + '/?r=' + code;
+  const text = 'Vieni a difendere il supermercato dagli zombie! Codice: ' + code;
+  try { if (navigator.share) { await navigator.share({ title: 'Apocalisse a Domicilio', text, url }); return; } } catch (e) {}
+  try { await navigator.clipboard.writeText(url); $('btnShare').textContent = 'Link copiato!'; setTimeout(() => $('btnShare').textContent = 'Invita amici', 1500); }
+  catch (e) { prompt('Copia il link:', url); }
+};
+PH.forEach((t, i) => {
+  const b = document.createElement('button'); b.textContent = (i + 1) + ' ' + t;
+  b.onclick = () => say(i); $('shout').appendChild(b);
+});
+function say(k) { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'say', k })); }
+
+let lastUi = '';
+function onSnapshot() {
+  const isHost = S.h === myId;
+  const key = S.st + '|' + S.p.map((p) => p.i + p.n).join(',') + '|' + S.h;
+  if (key !== lastUi) {
+    lastUi = key;
+    $('lobby').style.display = S.st === 'lobby' ? 'block' : 'none';
+    $('lcode').textContent = S.c;
+    $('lwho').textContent = S.p.map((p) => EM[p.e] + ' ' + p.n).join('   ');
+    $('btnStart').style.display = isHost ? '' : 'none';
+    $('lhint').textContent = isHost ? 'Quando siete pronti, premi Inizia (' + S.p.length + '/6)' : 'In attesa che il capo avvii la partita…';
+    $('over').style.display = S.st === 'over' ? 'flex' : 'none';
+    $('btnAgain').style.display = isHost ? '' : 'none';
+    $('owait').textContent = isHost ? '' : 'Aspetta che il capo ricominci…';
+    $('owave').textContent = S.w;
+    $('score').innerHTML = S.p.slice().sort((a, b) => b.sc - a.sc).map((p) => EM[p.e] + ' ' + p.n + ' — <b>' + p.sc + '</b>').join('<br>');
+  }
+  if (S.st === 'over') $('score').innerHTML = S.p.slice().sort((a, b) => b.sc - a.sc).map((p) => EM[p.e] + ' ' + p.n + ' — <b>' + p.sc + '</b>').join('<br>');
+}
+
+// ---------- Input ----------
+const keys = new Set(); let mx = 0, my = 0, mdown = false;
+const T = { move: null, aim: null };
+addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  keys.add(e.code);
+  if (e.code >= 'Digit1' && e.code <= 'Digit4') say(+e.code.slice(5) - 1);
+});
+addEventListener('keyup', (e) => keys.delete(e.code));
+cv.addEventListener('mousemove', (e) => { mx = e.clientX; my = e.clientY; });
+cv.addEventListener('mousedown', (e) => { mx = e.clientX; my = e.clientY; mdown = true; });
+addEventListener('mouseup', () => { mdown = false; });
+cv.addEventListener('contextmenu', (e) => e.preventDefault());
+function tTouches(e, fn) { e.preventDefault(); for (const t of e.changedTouches) fn(t); }
+cv.addEventListener('touchstart', (e) => tTouches(e, (t) => {
+  const k = t.clientX < innerWidth / 2 ? 'move' : 'aim';
+  if (!T[k]) T[k] = { id: t.identifier, ox: t.clientX, oy: t.clientY, x: t.clientX, y: t.clientY };
+}), { passive: false });
+cv.addEventListener('touchmove', (e) => tTouches(e, (t) => {
+  for (const k of ['move', 'aim']) if (T[k] && T[k].id === t.identifier) { T[k].x = t.clientX; T[k].y = t.clientY; }
+}), { passive: false });
+const tEnd = (e) => tTouches(e, (t) => { for (const k of ['move', 'aim']) if (T[k] && T[k].id === t.identifier) T[k] = null; });
+cv.addEventListener('touchend', tEnd, { passive: false });
+cv.addEventListener('touchcancel', tEnd, { passive: false });
+
+let cam = { x: 0, y: 0, sc: 1 };
+function myDisp() { return disp.get('p' + myId); }
+
+setInterval(() => {
+  if (!ws || ws.readyState !== 1 || myId === null || !S) return;
+  let dx = 0, dy = 0, a = 0, s = false;
+  if (keys.has('KeyA') || keys.has('ArrowLeft')) dx -= 1;
+  if (keys.has('KeyD') || keys.has('ArrowRight')) dx += 1;
+  if (keys.has('KeyW') || keys.has('ArrowUp')) dy -= 1;
+  if (keys.has('KeyS') || keys.has('ArrowDown')) dy += 1;
+  const me = myDisp();
+  if (me) { a = Math.atan2(cam.y + my / cam.sc - me.y, cam.x + mx / cam.sc - me.x); s = mdown; }
+  if (T.move) { const vx = T.move.x - T.move.ox, vy = T.move.y - T.move.oy; const l = Math.hypot(vx, vy); if (l > 6) { dx = (vx / 50); dy = (vy / 50); const m = Math.hypot(dx, dy); if (m > 1) { dx /= m; dy /= m; } } }
+  if (T.aim) { const vx = T.aim.x - T.aim.ox, vy = T.aim.y - T.aim.oy; if (Math.hypot(vx, vy) > 12) { a = Math.atan2(vy, vx); s = true; } }
+  ws.send(JSON.stringify({ t: 'in', dx: +dx.toFixed(2), dy: +dy.toFixed(2), a: +a.toFixed(2), s }));
+}, 33);
+
+// ---------- Rendering ----------
+function resize() {
+  dpr = window.devicePixelRatio || 1; cw = innerWidth; ch = innerHeight;
+  cv.width = cw * dpr; cv.height = ch * dpr;
+}
+addEventListener('resize', resize); resize();
+
+function sm(key, x, y) {
+  let d = disp.get(key);
+  if (!d) { d = { x, y }; disp.set(key, d); }
+  d.x += (x - d.x) * 0.35; d.y += (y - d.y) * 0.35; d.seen = frame;
+  return d;
+}
+function emo(ch_, x, y, size) { ctx.font = size + 'px sans-serif'; ctx.fillText(ch_, x, y); }
+
+function draw() {
+  requestAnimationFrame(draw); frame++;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#14141c'; ctx.fillRect(0, 0, cw, ch);
+  if (!S) return;
+  if (frame % 120 === 0) for (const [k, d] of disp) if (frame - d.seen > 60) disp.delete(k);
+
+  // posizioni smussate
+  for (const p of S.p) sm('p' + p.i, p.x, p.y);
+  for (const z of S.z) sm('z' + z[0], z[1], z[2]);
+  const me = myDisp();
+
+  const sc = Math.max(0.45, Math.min(1.4, Math.min(cw / 1100, ch / 700)));
+  const vw = cw / sc, vh = ch / sc;
+  let camX = me ? me.x - vw / 2 : (WW - vw) / 2, camY = me ? me.y - vh / 2 : (HH - vh) / 2;
+  camX = vw >= WW ? (WW - vw) / 2 : Math.max(0, Math.min(WW - vw, camX));
+  camY = vh >= HH ? (HH - vh) / 2 : Math.max(0, Math.min(HH - vh, camY));
+  cam = { x: camX, y: camY, sc };
+
+  ctx.save(); ctx.scale(sc, sc); ctx.translate(-camX, -camY);
+  // pavimento a scacchi
+  ctx.fillStyle = '#3a3d4a'; ctx.fillRect(0, 0, WW, HH);
+  ctx.fillStyle = '#434756';
+  for (let gx = 0; gx < WW; gx += 100) for (let gy = 0; gy < HH; gy += 100) if (((gx + gy) / 100) % 2 === 0) ctx.fillRect(gx, gy, 100, 100);
+  ctx.strokeStyle = '#ff5a36'; ctx.lineWidth = 6; ctx.strokeRect(0, 0, WW, HH);
+  // scaffali
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const goods = ['🥫', '🍞', '🧀', '🍝', '🥫', '🍌'];
+  for (const s of SHELVES) {
+    ctx.fillStyle = '#7a4f2a'; ctx.fillRect(s.x, s.y, s.w, s.h);
+    ctx.fillStyle = '#5a3a1e'; ctx.fillRect(s.x, s.y + s.h - 6, s.w, 6);
+    for (let i = 0, x = s.x + 16; x < s.x + s.w - 10; x += 32, i++) emo(goods[i % goods.length], x, s.y + s.h / 2 - 2, 22);
+  }
+  // proiettili
+  ctx.fillStyle = '#ffe36b';
+  for (const b of S.b) { ctx.beginPath(); ctx.arc(b[0], b[1], 4, 0, 7); ctx.fill(); }
+  // zombie
+  for (const z of S.z) {
+    const d = disp.get('z' + z[0]); if (!d) continue;
+    const type = z[3];
+    const size = type === 3 ? 90 : type === 1 ? 38 : 34;
+    ctx.save(); ctx.translate(d.x, d.y + Math.sin(frame * 0.2 + z[0]) * 2);
+    emo(type === 2 ? '🤵' : '🧟', 0, 0, size);
+    if (type === 1) emo('🚧', 0, -22, 22);
+    if (type === 3) emo('👑', 0, -size * 0.6, 34);
+    if (z[4] < 100) {
+      const bw = type === 3 ? 80 : 30, by = -size * 0.62;
+      ctx.fillStyle = '#000a'; ctx.fillRect(-bw / 2, by, bw, 5);
+      ctx.fillStyle = '#e24'; ctx.fillRect(-bw / 2, by, bw * z[4] / 100, 5);
+    }
+    ctx.restore();
+  }
+  // giocatori
+  for (const p of S.p) {
+    const d = disp.get('p' + p.i); if (!d) continue;
+    ctx.save(); ctx.translate(d.x, d.y);
+    if (p.d) {
+      emo('😵', 0, 0, 30);
+      ctx.strokeStyle = '#fff3'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(0, 0, 60, 0, 7); ctx.stroke();
+      ctx.strokeStyle = '#7ee081'; ctx.lineWidth = 5; ctx.beginPath(); ctx.arc(0, 0, 24, -Math.PI / 2, -Math.PI / 2 + p.rv * Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 12px sans-serif'; ctx.fillText('rianimami!', 0, 42);
+    } else {
+      ctx.rotate(p.a); ctx.fillStyle = '#222'; ctx.fillRect(12, -4, 20, 8); ctx.fillStyle = COL[p.e]; ctx.fillRect(28, -3, 6, 6); ctx.rotate(-p.a);
+      emo(EM[p.e], 0, 0, 34);
+    }
+    // nome + barra vita
+    ctx.fillStyle = p.i === myId ? '#ffd24a' : '#fff'; ctx.font = 'bold 12px sans-serif'; ctx.fillText(p.n, 0, -34);
+    if (!p.d) { ctx.fillStyle = '#000a'; ctx.fillRect(-18, -28, 36, 5); ctx.fillStyle = p.hp > 40 ? '#4d4' : '#e44'; ctx.fillRect(-18, -28, 36 * p.hp / 100, 5); }
+    // fumetto
+    if (p.sy >= 0) {
+      const t = PH[p.sy]; ctx.font = 'bold 14px sans-serif'; const w = ctx.measureText(t).width + 14;
+      ctx.fillStyle = '#fff'; ctx.fillRect(-w / 2, -66, w, 22); ctx.fillStyle = '#000'; ctx.fillText(t, 0, -55);
+    }
+    ctx.restore();
+  }
+  ctx.restore();
+
+  // ---- HUD ----
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff';
+  if (S.st === 'play') {
+    ctx.font = 'bold 20px sans-serif';
+    ctx.fillText(S.bk > 0 ? 'Respiro! Ondata ' + (S.w + 1) + ' tra ' + S.bk + 's' : 'Ondata ' + S.w + '  —  🧟 ' + S.zl + ' rimasti', cw / 2, 24);
+    if (S.p.some((p) => p.d)) { ctx.font = '14px sans-serif'; ctx.fillStyle = '#7ee081'; ctx.fillText('Avvicinati a un amico a terra per rianimarlo!', cw / 2, 48); }
+  } else if (S.st === 'lobby') {
+    ctx.font = '14px sans-serif'; ctx.fillStyle = '#fff9';
+    ctx.fillText('Intanto riscaldati: WASD per muoverti, mouse per mirare, clic per sparare', cw / 2, ch - 50);
+  }
+  ctx.textAlign = 'left'; ctx.font = '13px sans-serif';
+  S.p.forEach((p, i) => {
+    ctx.fillStyle = COL[p.e]; ctx.fillText(EM[p.e] + ' ' + p.n + '  ' + p.sc + (p.d ? '  ☠' : '  ❤' + p.hp), 10, 70 + i * 18);
+  });
+  // joystick touch
+  for (const k of ['move', 'aim']) {
+    const t = T[k]; if (!t) continue;
+    ctx.strokeStyle = '#fff6'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(t.ox, t.oy, 50, 0, 7); ctx.stroke();
+    ctx.fillStyle = '#fff5'; ctx.beginPath(); ctx.arc(t.ox + Math.max(-50, Math.min(50, t.x - t.ox)), t.oy + Math.max(-50, Math.min(50, t.y - t.oy)), 22, 0, 7); ctx.fill();
+  }
+}
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
